@@ -152,62 +152,70 @@ export abstract class DatabaseDriver<C extends Connection> implements IDatabaseD
   }
 
   protected inlineEmbeddables<T>(meta: EntityMetadata<T>, data: T, where?: boolean): void {
-    Object.keys(data as Dictionary).forEach(k => {
-      if (Utils.isOperator(k)) {
-        Utils.asArray(data[k]).forEach(payload => this.inlineEmbeddables(meta, payload, where));
+    for (const key of Object.keys(data as Dictionary)) {
+      if (Utils.isOperator(key)) {
+        for (const payload of Utils.asArray(data[key])) {
+          this.inlineEmbeddables(meta, payload, where);
+        }
       }
-    });
+    }
 
-    meta.props.forEach(prop => {
-      if (prop.reference === ReferenceType.EMBEDDED && prop.object && !where && Utils.isObject(data[prop.name])) {
+    for (const prop of meta.props) {
+      const propName = prop.name;
+      const propValue = data[propName];
+
+      if (prop.reference === ReferenceType.EMBEDDED && prop.object && !where && Utils.isObject(propValue)) {
         return;
       }
 
       if (prop.reference === ReferenceType.EMBEDDED && Utils.isObject(data[prop.name])) {
-        const props = prop.embeddedProps;
+        const embedded = data[prop.name] as Dictionary;
+        const embeddedProps = prop.embeddedProps;
         let unknownProp = false;
 
-        Object.keys(data[prop.name] as Dictionary).forEach(kk => {
+        for (const embeddedKey of Object.keys(embedded)) {
           // explicitly allow `$exists`, `$eq` and `$ne` operators here as they can't be misused this way
-          const operator = Object.keys(data[prop.name] as Dictionary).some(f => Utils.isOperator(f) && !['$exists', '$ne', '$eq'].includes(f));
-
-          if (operator) {
+          if (Object.keys(embedded).some(f => Utils.isOperator(f) && !['$exists', '$ne', '$eq'].includes(f))) {
             throw ValidationError.cannotUseOperatorsInsideEmbeddables(meta.name!, prop.name, data);
           }
 
           if (prop.object && where) {
-            const inline: (payload: any, sub: EntityProperty, path: string[]) => void = (payload: any, sub: EntityProperty, path: string[]) => {
-              if (sub.reference === ReferenceType.EMBEDDED && Utils.isObject(payload[sub.embedded![1]])) {
-                return Object.keys(payload[sub.embedded![1]]).forEach(kkk => {
-                  if (!sub.embeddedProps[kkk]) {
-                    throw ValidationError.invalidEmbeddableQuery(meta.className, kkk, sub.type);
+            const inline = (payload: any, sub: EntityProperty, path: string[]) => {
+              const embeddedField = sub.embedded![1];
+              const embeddedValue = payload[embeddedField];
+
+              if (sub.reference === ReferenceType.EMBEDDED && Utils.isObject(embeddedValue)) {
+                for (const key of Object.keys(embeddedValue)) {
+                  if (!sub.embeddedProps[key]) {
+                    throw ValidationError.invalidEmbeddableQuery(meta.className, key, sub.type);
                   }
 
-                  inline(payload[sub.embedded![1]], sub.embeddedProps[kkk], [...path, sub.embedded![1]]);
-                });
+                  inline(embeddedValue, sub.embeddedProps[key], [...path, embeddedField]);
+                }
+                return;
               }
 
-              data[`${path.join('.')}.${sub.embedded![1]}`] = payload[sub.embedded![1]];
+              data[`${path.join('.')}.${embeddedField}`] = embeddedValue;
             };
 
             // we might be using some native JSON operator, e.g. with mongodb's `$geoWithin` or `$exists`
-            if (props[kk]) {
-              inline(data[prop.name], props[kk], [prop.name]);
+            if (embeddedProps[embeddedKey]) {
+              inline(embedded, embeddedProps[embeddedKey], [prop.name]);
             } else {
               unknownProp = true;
             }
-          } else if (props[kk]) {
-            data[props[kk].name] = data[prop.name][props[kk].embedded![1]];
+          } else if (embeddedProps[embeddedKey]) {
+            data[embeddedProps[embeddedKey].name] = embedded[embeddedProps[embeddedKey].embedded![1]];
           } else {
-            throw ValidationError.invalidEmbeddableQuery(meta.className, kk, prop.type);
+            throw ValidationError.invalidEmbeddableQuery(meta.className, embeddedKey, prop.type);
           }
-        });
+        }
 
         if (!unknownProp) {
-          delete data[prop.name];
+          delete data[propName];
         }
       }
-    });
+    }
   }
 
   protected getPivotOrderBy<T>(prop: EntityProperty<T>, orderBy?: QueryOrderMap<T>[]): QueryOrderMap<T>[] {

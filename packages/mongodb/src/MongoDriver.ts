@@ -154,7 +154,7 @@ export class MongoDriver extends DatabaseDriver<MongoConnection> {
 
     // If we had a query with $fulltext and some filter we end up with $and with $fulltext in it.
     // We will try to move $fulltext to top level.
-    if (copiedData.$and) {
+    if ('$and' in copiedData) {
       for (let i = 0; i < copiedData.$and.length; i++) {
         const and = copiedData.$and[i];
         if ('$fulltext' in and) {
@@ -179,43 +179,55 @@ export class MongoDriver extends DatabaseDriver<MongoConnection> {
       throw new Error('Full text search is only supported on the top level of the query object.');
     }
 
-    Object.keys(copiedData).forEach(k => {
-      if (Utils.isGroupOperator(k)) {
+    for (const key of Object.keys(copiedData)) {
+      if (Utils.isGroupOperator(key)) {
         /* istanbul ignore else */
-        if (Array.isArray(copiedData[k])) {
-          copiedData[k] = copiedData[k].map((v: any) => this.renameFields(entityName, v));
+        if (Array.isArray(copiedData[key])) {
+          copiedData[key] = copiedData[key].map((v: any) => this.renameFields(entityName, v));
         } else {
-          copiedData[k] = this.renameFields(entityName, copiedData[k]);
+          copiedData[key] = this.renameFields(entityName, copiedData[key]);
         }
 
-        return;
+        continue;
       }
 
-      if (meta?.properties[k]) {
-        const prop = meta.properties[k];
+      if (meta?.properties[key]) {
+        const prop = meta.properties[key];
         let isObjectId = false;
 
-        if (prop.reference === ReferenceType.SCALAR) {
-          isObjectId = prop.type.toLowerCase() === 'objectid';
-        } else if (prop.reference !== ReferenceType.EMBEDDED) {
-          const meta2 = this.metadata.find(prop.type)!;
-          const pk = meta2.properties[meta2.primaryKeys[0]];
-          isObjectId = pk.type.toLowerCase() === 'objectid';
+        switch (prop.reference) {
+          case ReferenceType.SCALAR: {
+            isObjectId = prop.type.toLowerCase() === 'objectid';
+            break;
+          }
+          case ReferenceType.EMBEDDED: {
+            if (prop.array) {
+              copiedData[key] = copiedData[key].map((item: Dictionary) => this.renameFields(prop.type, item, where));
+            } else {
+              copiedData[key] = this.renameFields(prop.type, copiedData[key], where);
+            }
+            break;
+          }
+          default: {
+            const meta2 = this.metadata.find(prop.type)!;
+            const pk = meta2.properties[meta2.primaryKeys[0]];
+            isObjectId = pk.type.toLowerCase() === 'objectid';
+          }
         }
 
         if (isObjectId) {
-          copiedData[k] = this.convertObjectIds(copiedData[k]);
+          copiedData[key] = this.convertObjectIds(copiedData[key]);
         }
 
         if (prop.fieldNames) {
-          Utils.renameKey(copiedData, k, prop.fieldNames[0]);
+          Utils.renameKey(copiedData, key, prop.fieldNames[0]);
         }
       }
 
-      if (Utils.isPlainObject(copiedData[k]) && '$re' in copiedData[k]) {
-        copiedData[k] = new RegExp(copiedData[k].$re);
+      if (Utils.isPlainObject(copiedData[key]) && '$re' in copiedData[key]) {
+        copiedData[key] = new RegExp(copiedData[key].$re);
       }
-    });
+    }
 
     return copiedData as T;
   }
